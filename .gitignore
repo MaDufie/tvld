@@ -1,5 +1,6 @@
 .venv312/
 .venv312_numpy126/
 main_benchmark/data/
+main_benchmark/baselines/alora/pairs_cache_alora/
 noise_robustness/
 __pycache__/

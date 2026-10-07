@@ -1,25 +1,32 @@
 """TVL-D model: Shape + Level + Structure, POT/GPD-calibrated,
-weighted fusion + smoothing. ONE fixed, dataset-agnostic pipeline.
+weighted fusion + smoothing. One fixed statistical pipeline.
 
 -------------------------------------------------------------------------
 THE MODEL, IN ONE PARAGRAPH
 -------------------------------------------------------------------------
 Three independent severity signals are computed per variable, per timestep:
   Shape     -- AB-join matrix-profile discord (stumpy.stump, z-normalized):
-               "does this recent pattern look like anything seen in training?"
+               "does this recent pattern look like anything seen in the normal 
+               reference data?"
   Level     -- |x - train_mean| / train_std: "is the raw magnitude unusual?"
   Structure -- |x - PCA_reconstruction(x)|: "does this break the learned
                cross-channel correlation structure?"
 Each is independently calibrated onto a common -log(tail_probability) scale via
-POT/GPD extreme-value tail fitting (SPOT-style, Siffer et al. 2017), so summing
-them is Fisher's method for combining independent significance tests -- cells
-that are unremarkable in all three signals contribute ~0, cells surprising in
-even one don't get diluted by the other two.
+POT/GPD extreme-value tail fitting (Siffer et al. 2017), placing the three
+signals on a comparable transformed tail-probability scale. Their weighted
+additive fusion is related to Fisher-style evidence aggregation, but is not
+treated here as an exact Fisher test. Cells that are unremarkable in all three
+signals contribute approximately 0, while extreme observations receive larger
+severity values.
 
-The three signals are combined with FIXED weights. These weights/window are used 
-ZERO-SHOT on every dataset below -- never retuned per dataset  B.
+The three signals are combined with fixed weights. The same weights and
+smoothing window are used unchanged across all evaluation datasets. TVL-D is
+training-free in the sense used in the paper: it requires no gradient-based
+model optimization, while statistical reference quantities are estimated from
+the provided normal training split.
 
 """
+import ast
 import time
 from pathlib import Path
 
@@ -58,7 +65,8 @@ def pot_severity(x, tail_frac=TAIL_FRAC):
     if len(exceed) >= 20 and exceed.std() > 1e-9:
         try:
             shape, loc, scale = stats.genpareto.fit(exceed, floc=0)
-            tail_p = np.where(x > thresh, tail_frac * stats.genpareto.sf(x - thresh, shape, loc=0, scale=scale), 1.0)
+            tail_p = np.where(
+                x > thresh, tail_frac * stats.genpareto.sf(x - thresh, shape, loc=0, scale=scale), 1.0)
         except Exception:
             tail_p = 1 - stats.rankdata(x) / len(x)
     else:
@@ -78,9 +86,11 @@ def window_scores_to_point_scores(window_scores, m, n_points):
     n_windows = len(window_scores)
     padded = np.full(n_points, np.nan)
     padded[:n_windows] = window_scores
-    point = maximum_filter1d(np.nan_to_num(padded, nan=-np.inf), size=m, origin=-(m // 2))
+    point = maximum_filter1d(np.nan_to_num(
+        padded, nan=-np.inf), size=m, origin=-(m // 2))
     valid = ~np.isnan(padded)
-    last_valid_idx = np.maximum.accumulate(np.where(valid, np.arange(n_points), 0))
+    last_valid_idx = np.maximum.accumulate(
+        np.where(valid, np.arange(n_points), 0))
     point = np.where(point == -np.inf, padded[last_valid_idx], point)
     return point
 
@@ -94,7 +104,7 @@ def pick_window(train_len, test_len, default=100):
 # ---------------------------------------------------------------- three signals --
 def shape_severity(train, test, m, tail_frac=TAIL_FRAC):
     """Per-variable AB-join matrix-profile discord (z-normalized): 'does this
-    recent window look like anything seen in training, for THIS variable?'
+    recent window look like anything seen in the normal reference data, for THIS variable?'
     Constant columns (common one-hot command flags) are skipped - no meaningful
     shape signal, left at severity 0."""
     n_points, D = test.shape
@@ -104,7 +114,8 @@ def shape_severity(train, test, m, tail_frac=TAIL_FRAC):
         T_B = np.ascontiguousarray(test[:, v])
         if np.std(T_A) < 1e-9 and np.std(T_B) < 1e-9:
             continue
-        profile = stumpy.stump(T_B, m, T_A, ignore_trivial=False, normalize=True)[:, 0].astype(float)
+        profile = stumpy.stump(T_B, m, T_A, ignore_trivial=False, normalize=True)[
+            :, 0].astype(float)
         point_scores = window_scores_to_point_scores(profile, m, n_points)
         severity[:, v] = pot_severity(point_scores, tail_frac=tail_frac)
     return severity
@@ -142,9 +153,10 @@ def zscore_map(train, test):
 
 # ---------------------------------------------------------------- fusion --
 def point_score_from_map(the_map, primary_cols=None):
-    """Sum severity across the scored columns (Fisher's method across channels).
-    primary_cols=None -> score every column (SMD). primary_cols=[0] -> score only
-    the telemetry column, though the map itself may have been fit on more (SMAP/MSL)."""
+    """Sum calibrated severity across the scored columns.
+    primary_cols=None -> score every column (SMD/PSM).
+    primary_cols=[0] -> score only the telemetry column for SMAP/MSL.
+    """
     cols = the_map if primary_cols is None else the_map[:, primary_cols]
     return cols.sum(axis=1)
 
@@ -167,7 +179,8 @@ def get_ranges(a):
         if v == 1 and not in_r:
             start, in_r = i, True
         elif v == 0 and in_r:
-            ranges.append((start, i)); in_r = False
+            ranges.append((start, i))
+            in_r = False
     if in_r:
         ranges.append((start, len(a)))
     return ranges
@@ -222,7 +235,8 @@ def range_pr_auc(scores, y, n_thresh=80):
         pr = get_ranges((scores > t).astype(int))
         pts.append((range_recall(tr, pr), range_precision(tr, pr)))
     pts.sort(key=lambda p: p[0])
-    r = np.array([p[0] for p in pts]); pv = np.array([p[1] for p in pts])
+    r = np.array([p[0] for p in pts])
+    pv = np.array([p[1] for p in pts])
     trapz = getattr(np, "trapezoid", None) or np.trapz
     return float(trapz(pv, r))
 
@@ -234,9 +248,9 @@ def best_threshold_f1(scores, y, n_thresh=150):
         preds = (scores > t).astype(int)
         f1 = f1_score(y, preds, zero_division=0)
         if f1 > best[0]:
-            best = (f1, precision_score(y, preds, zero_division=0), recall_score(y, preds, zero_division=0))
+            best = (f1, precision_score(y, preds, zero_division=0),
+                    recall_score(y, preds, zero_division=0))
     return best
-
 
 
 def full_metrics(scores, y):
@@ -252,14 +266,16 @@ def full_metrics(scores, y):
 # ---------------------------------------------------------------- SMD loader --
 def load_smd_machine(mid, data_dir):
     data_dir = Path(data_dir)
-    train = pd.read_csv(data_dir / "train" / f"{mid}.txt", header=None).to_numpy(dtype=float)
-    test = pd.read_csv(data_dir / "test" / f"{mid}.txt", header=None).to_numpy(dtype=float)
-    label = pd.read_csv(data_dir / "test_label" / f"{mid}.txt", header=None).to_numpy(dtype=int).ravel()
+    train = pd.read_csv(data_dir / "train" /
+                        f"{mid}.txt", header=None).to_numpy(dtype=float)
+    test = pd.read_csv(data_dir / "test" /
+                       f"{mid}.txt", header=None).to_numpy(dtype=float)
+    label = pd.read_csv(data_dir / "test_label" /
+                        f"{mid}.txt", header=None).to_numpy(dtype=int).ravel()
     return train, test, label
 
 
 # ---------------------------------------------------------------- SMAP/MSL loader --
-import ast
 
 
 def load_smap_msl_meta(csv_path):
@@ -269,9 +285,10 @@ def load_smap_msl_meta(csv_path):
         cid = row["chan_id"]
         windows = ast.literal_eval(row["anomaly_sequences"])
         if cid not in meta:
-            meta[cid] = {"spacecraft": row["spacecraft"], "windows": list(windows), "num_values": int(row["num_values"])}
+            meta[cid] = {"spacecraft": row["spacecraft"], "windows": list(
+                windows), "num_values": int(row["num_values"])}
         else:
-            meta[cid]["windows"].extend(windows)  
+            meta[cid]["windows"].extend(windows)
     return meta
 
 

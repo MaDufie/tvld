@@ -1,10 +1,10 @@
 """TVL-D evaluation on SMD (28 machines).
 
-Reuses the final-model severity/fusion pipeline in ../tvld_final.py
-unmodified: same fixed weights (W_SHAPE=0.15, W_LEVEL=0.75, W_STRUCT=1.0),
-same smoothing window (35), zero retuning. Every column is scored
-(primary_cols=None) since all 38 SMD columns are genuine, correlated sensor
-telemetry.
+Reuses the final TVL-D severity/fusion pipeline in ../tvld_final.py
+unchanged: the same fixed weights (W_SHAPE=0.15, W_LEVEL=0.75, W_STRUCT=1.0)
+and smoothing window (35) are used with no dataset-specific retuning.
+Every column is scored (primary_cols=None) because all 38 SMD columns are
+genuine, correlated sensor telemetry.
 
 Usage:
     python run_smd_eval.py
@@ -37,9 +37,12 @@ def log(msg):
 
 
 def load_smd_machine(mid, data_dir):
-    train = pd.read_csv(data_dir / "train" / f"{mid}.txt", header=None).to_numpy(dtype=float)
-    test = pd.read_csv(data_dir / "test" / f"{mid}.txt", header=None).to_numpy(dtype=float)
-    label = pd.read_csv(data_dir / "test_label" / f"{mid}.txt", header=None).to_numpy(dtype=int).ravel()
+    train = pd.read_csv(data_dir / "train" /
+                        f"{mid}.txt", header=None).to_numpy(dtype=float)
+    test = pd.read_csv(data_dir / "test" /
+                       f"{mid}.txt", header=None).to_numpy(dtype=float)
+    label = pd.read_csv(data_dir / "test_label" /
+                        f"{mid}.txt", header=None).to_numpy(dtype=int).ravel()
     return train, test, label
 
 
@@ -54,12 +57,14 @@ def severities(mid, train, test):
     level_sev = level_severity(train, test)
     struct_sev = structure_severity(train, test)
     with open(ckpt_path, "wb") as f:
-        pickle.dump({"shape_sev": shape_sev, "level_sev": level_sev, "struct_sev": struct_sev}, f)
+        pickle.dump({"shape_sev": shape_sev, "level_sev": level_sev,
+                    "struct_sev": struct_sev}, f)
     return shape_sev, level_sev, struct_sev
 
 
 def main():
-    machines = sorted(p.stem for p in (SMD_DATA_DIR / "train").glob("machine-*.txt"))
+    machines = sorted(p.stem for p in (
+        SMD_DATA_DIR / "train").glob("machine-*.txt"))
     log(f"Found {len(machines)} SMD machines in {SMD_DATA_DIR}")
     if not machines:
         log(f"No machine-*.txt files under {SMD_DATA_DIR}/train -- check SMD_DATA_DIR / the data/ layout.")
@@ -76,7 +81,8 @@ def main():
             met = full_metrics(scores, label)
             if met is None:
                 continue
-            met.update({"machine": mid, "method": method, "D": train.shape[1], "test_len": test.shape[0]})
+            met.update({"machine": mid, "method": method,
+                       "D": train.shape[1], "test_len": test.shape[0]})
             rows.append(met)
 
         log(f"[{i+1}/{len(machines)}] {mid} done -- {(time.time()-t_start)/60:.1f} min elapsed")
