@@ -20,10 +20,7 @@ signals contribute approximately 0, while extreme observations receive larger
 severity values.
 
 The three signals are combined with fixed weights. The same weights and
-smoothing window are used unchanged across all evaluation datasets. TVL-D is
-training-free in the sense used in the paper: it requires no gradient-based
-model optimization, while statistical reference quantities are estimated from
-the provided normal training split.
+smoothing window are used unchanged across all evaluation datasets.
 
 """
 import ast
